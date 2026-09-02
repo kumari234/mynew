@@ -1,52 +1,95 @@
-name: Java CI with Maven
+name: CICD pipeline with java based application
 
-on:
-  push:
-    branches:
-      - master
-      - develop
+On: 
+ push: 
+   branches: [main]
+ pull_request:
+   branches: [main, dev]
+workflow_dispatch:
 
-  pull_request:
-    branches:
-      - master
-
-  workflow_dispatch:
+permissions: 
+  contents: read
 
 jobs:
-  build-and-test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      # Downloads the repository code to the runner
-      - name: Checkout source code
-        uses: actions/checkout@v4
+    - name: checkout source code
+      uses: actions/checkout@v4
 
-      # Installs Java on the runner
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+    - name: configure java
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        version: '17'
+        cache: maven
 
-      # Displays Java and Maven versions
-      - name: Verify Java and Maven
-        run: |
-          java -version
-          mvn -version
+    - name: build and test
+      run: mvn clean verify
 
-      # Compiles the code, runs tests and creates the JAR/WAR
-      - name: Build and test application
-        run: mvn clean verify
+    - name: upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: java-application
+        path: /target/*.jar
 
-      # Saves the generated artifact
-      - name: Upload application artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: java-application-${{ github.run_number }}
-          path: |
-            target/*.jar
-            target/*.war
-          if-no-files-found: error
-          retention-days: 7
+docker: 
+  if github.event_name == 'push'
+  needs: build
+  runs-on: ubuntu-latest
+
+  steps:
+  - name: checkout source code
+    uses: actions/checkout@v4
+
+  - name: download artifact
+    uses: actions/download-artifact@v4
+    with:
+      name: java-application
+      path: target
+
+  - name: docker login
+    uses: docker/login-action@v3
+    with: 
+      username: ${{ secrets.DOCKERHUB_USERNAME }}
+      password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  - name: build docker image
+    run: | 
+    docker build \
+      -t ${{ secrets.DOCKERHUB_USERNAME }}/java-app:{{ github.sha }} .
+
+  - name: push docker image
+    run: |
+    docker push \
+      ${{ secrets.DOCKERHUB_USERNAME }}/java-app:{{ github.sha }}
+
+deploy-dev:
+  needs: docker
+  runs-on: ubuntu-latest
+  environment: development
+  
+ steps: 
+ - name: deploy
+   run: ./deploy.sh development {{ github.sha }}
+
+ - name: health check
+   run: curl --fail --retry 5 https://github.com
+
+deploy-production:
+  needs: deploy-dev
+  runs-on: ubuntu-latest
+  environment: production
+
+  steps:
+  - name: deploy
+    run: ./deploy.sh production {{ github.sha }}
+
+  - name: health check
+    run: curl --fail --retry 5 https://github.com/health
+    
+
+   
+    
+    
